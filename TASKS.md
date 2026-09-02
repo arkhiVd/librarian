@@ -19,4 +19,4 @@ Change class: Risky. The application authenticates users and deletes files. Work
 - [x] Re-read the full diff against `SPEC.md`.
 - [x] Obtain an independent read-only review in a fresh Pi/Herdr context.
 - [x] Resolve all independent-review findings and rerun the validation gate.
-- [ ] Obtain explicit human approval before creating a GitHub repository or pushing.
+- [x] Obtain explicit human approval, create the public GitHub repository, and push `main`.
