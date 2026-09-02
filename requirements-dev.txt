@@ -1,0 +1,4 @@
+# Host tooling for the local gate. Not installed into the container image.
+-r requirements.txt
+ruff==0.16.1
+pytest==9.1.1

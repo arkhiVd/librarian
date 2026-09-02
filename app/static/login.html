@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="cyan">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>librarian &middot; sign in</title>
+<!-- app.main._login_page() substitutes two comment markers and raises if either is
+     missing. Their names are written with spaces in this comment because substitution
+     uses str.replace():
+       ERROR marker  escaped authentication error or nothing
+       NEXT marker   escaped post-login destination
+
+     The stylesheet is bundled and same-origin. The credential form loads no remote
+     scripts or styles. -->
+<link rel="stylesheet" href="/librarian.css">
+</head>
+<body>
+<div class="grid-bg" aria-hidden="true"></div>
+
+<main class="login-wrap">
+  <div class="login-card">
+    <span class="brand">libr<span class="brand-acc">arian</span></span>
+    <p class="label">media deletion portal &middot; private access only</p>
+<!--ERROR-->
+    <form method="post" action="/login" autocomplete="on">
+      <input type="hidden" name="next" value="<!--NEXT-->">
+      <div class="field">
+        <label for="username">Username</label>
+        <input id="username" name="username" type="text" autocomplete="username"
+               autocapitalize="none" autocorrect="off" spellcheck="false" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Password</label>
+        <input id="password" name="password" type="password"
+               autocomplete="current-password" required>
+      </div>
+      <button class="btn btn-primary btn-block" type="submit">Sign in</button>
+    </form>
+  </div>
+</main>
+</body>
+</html>

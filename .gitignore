@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.env
+.env.*
+!.env.example
+audit.log
+data/
+coverage.xml
+htmlcov/
+.DS_Store

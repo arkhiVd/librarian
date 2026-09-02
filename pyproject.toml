@@ -1,0 +1,19 @@
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "PTH"]
+
+[tool.ruff.lint.flake8-bugbear]
+# `Depends(...)` in a default is the FastAPI dependency-injection idiom, not the
+# mutable-default bug B008 exists to catch.
+extend-immutable-calls = ["fastapi.Depends"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+# Without this, `.venv/bin/pytest` fails at collection with "No module named 'app'".
+# Only `python -m pytest` worked, because that form prepends CWD to sys.path — so the
+# command written in AGENTS.md was broken while the suite looked green. Found in review.
+pythonpath = ["."]

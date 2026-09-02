@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en" data-theme="dark" data-accent="cyan">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>librarian</title>
+<!-- Bundled and same-origin so the deletion interface has no runtime dependency on
+     another web service. -->
+<link rel="stylesheet" href="/librarian.css">
+</head>
+<body>
+<!-- The grid is decorative, stays behind the content, and ignores pointer events. -->
+<div class="grid-bg" aria-hidden="true"></div>
+
+<nav class="hl-nav">
+  <div class="wrap">
+    <span class="brand">libr<span class="brand-acc">arian</span></span>
+    <span class="label hide-sm">media deletion · no undo</span>
+    <span class="spacer"></span>
+    <!-- A real form, not a fetch: logout clears an HttpOnly cookie, so it must be a
+         navigation the browser follows to pick up the Set-Cookie. -->
+    <form method="post" action="/logout" style="margin:0">
+      <button class="btn btn-sm btn-ghost" type="submit">Sign out</button>
+    </form>
+  </div>
+</nav>
+
+<div class="wrap">
+  <div class="tabs" role="tablist">
+    <button role="tab" data-view="music" aria-selected="true">Music</button>
+    <button role="tab" data-view="video" aria-selected="false">Movies &amp; TV</button>
+    <button role="tab" data-view="books" aria-selected="false">Books</button>
+    <button role="tab" data-view="slskd" aria-selected="false">slskd leftovers</button>
+    <button role="tab" data-view="audit" aria-selected="false">Audit</button>
+  </div>
+</div>
+
+<main class="wrap">
+  <div id="view"></div>
+</main>
+
+<dialog class="hl" id="confirm">
+  <form method="dialog">
+    <h3 id="dlg-title">Confirm deletion</h3>
+    <div class="dlg-body" id="dlg-body"></div>
+    <div class="field" style="margin-top:var(--s-5)">
+      <label for="dlg-input">Type the confirmation phrase</label>
+      <input type="text" id="dlg-input" autocomplete="off" spellcheck="false">
+    </div>
+    <div class="dialog-actions">
+      <button class="btn btn-ghost" value="cancel">Cancel</button>
+      <button class="btn btn-danger" id="dlg-go" value="go" disabled>Delete</button>
+    </div>
+  </form>
+</dialog>
+
+<style>
+  /* View-specific layout. Shared controls and color tokens live in librarian.css. */
+  .toolbar { display: flex; gap: var(--s-3); align-items: center; flex-wrap: wrap; margin: var(--s-4) 0; }
+  .crumbs { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: center;
+            margin-block: var(--s-4) var(--s-3); font-family: var(--font-mono); font-size: .8rem; }
+  .crumbs button { background: none; border: 0; color: var(--acc); cursor: pointer;
+                   font: inherit; padding: 0; }
+  .crumbs button:hover { color: var(--acc-bright); text-decoration: underline; }
+  .name { background: none; border: 0; color: var(--fg-bright); cursor: pointer;
+          font: inherit; text-align: left; padding: 0; overflow-wrap: anywhere; }
+  .name:hover { color: var(--acc); }
+  .artists { color: var(--fg-dim); font-size: .8rem; margin-top: 2px; overflow-wrap: anywhere; }
+  .cell-main { display: flex; flex-wrap: wrap; gap: var(--s-2); align-items: baseline; min-width: 0; }
+  .warn { border-left: 3px solid var(--warn); background: var(--warn-bg);
+          padding: var(--s-3); border-radius: 0 var(--r-2) var(--r-2) 0;
+          margin-bottom: var(--s-3); font-size: .9rem; }
+  .warn.stop { border-left-color: var(--bad); background: var(--bad-bg); }
+  .step { border: 1px solid var(--border-soft); border-radius: var(--r-2);
+          padding: var(--s-3); margin-bottom: var(--s-2); }
+  .step h4 { font-size: .85rem; margin-bottom: 2px; }
+  .step .targets { color: var(--fg-dim); font-size: .78rem; font-family: var(--font-mono);
+                   white-space: pre-wrap; overflow-wrap: anywhere; }
+  .stat { display: flex; gap: var(--s-6); flex-wrap: wrap; margin-bottom: var(--s-4);
+          font-variant-numeric: tabular-nums; }
+  .stat > div { font-size: 1.05rem; color: var(--fg-bright); }
+  .stat span { display: block; font-family: var(--font-mono); font-size: .68rem;
+               letter-spacing: .1em; text-transform: uppercase; color: var(--fg-dim); }
+  .dlg-body { max-height: 60vh; overflow: auto; }
+  pre.audit { font-size: .74rem; max-height: 70vh; }
+  .st-ok { color: var(--ok); } .st-failed { color: var(--bad); } .st-skipped { color: var(--fg-dim); }
+  @media (max-width: 600px) { .hide-sm { display: none; } }
+</style>
+
+<script>
+// --- escaping -------------------------------------------------------------
+// esc() for anything going into markup. jsq() for anything going into an inline
+// handler: a browser decodes HTML entities in an onclick before parsing JavaScript, so
+// escaping ' to &#39; terminates the string rather than protecting it. File and tag names
+// come from external systems and must be treated as untrusted.
+function esc(s){return String(s??"").replace(/[&<>"']/g,c=>(
+  {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function jsq(s){return esc(String(s??"").replace(/\\/g,"\\\\").replace(/'/g,"\\'"));}
+
+function bytes(n){
+  if(!n) return "0";
+  const u=["B","KB","MB","GB","TB"];let i=0,v=n;
+  while(v>=1024&&i<u.length-1){v/=1024;i++;}
+  return v.toFixed(i?1:0)+" "+u[i];
+}
+
+async function api(path,opts){
+  const r=await fetch(path,opts);
+  // The session cookie expired or was cleared. fetch() sends Accept: */*, so the
+  // server answers 401 rather than redirecting — the redirect has to happen here, or
+  // every panel would just show "unauthorized" with no way forward.
+  if(r.status===401){
+    location.href="/login?next="+encodeURIComponent(location.pathname+location.search);
+    throw new Error("session expired");
+  }
+  if(!r.ok){
+    let d;try{d=(await r.json()).detail;}catch(e){d=r.statusText;}
+    throw new Error(typeof d==="string"?d:JSON.stringify(d));
+  }
+  return r.json();
+}
+
+const state={view:"music",path:"",selected:new Set(),shared:{}};
+const el=document.getElementById("view");
+
+document.querySelectorAll(".tabs button").forEach(t=>t.addEventListener("click",()=>{
+  document.querySelectorAll(".tabs button").forEach(x=>x.setAttribute("aria-selected",x===t));
+  state.view=t.dataset.view;state.path="";state.selected.clear();render();
+}));
+
+function render(){
+  if(state.view==="music") return renderLibrary("music");
+  if(state.view==="video") return renderLibrary("video");
+  if(state.view==="books") return renderLibrary("books");
+  if(state.view==="slskd") return renderSlskd();
+  return renderAudit();
+}
+
+// --- library --------------------------------------------------------------
+async function renderLibrary(kind){
+  el.innerHTML='<div class="empty">loading library…</div>';
+  let d;
+  try{ d=await api("/api/"+kind+"/tree?path="+encodeURIComponent(state.path)); }
+  catch(e){ el.innerHTML='<div class="warn stop">'+esc(e.message)+'</div>'; return; }
+  if(!state.path) state.shared=d.shared_directories||{};
+
+  const parts=state.path?state.path.split("/"):[];
+  let crumbs='<button onclick="go(\'\')">'+esc(kind)+'</button>';
+  parts.forEach((p,i)=>{
+    const upto=parts.slice(0,i+1).join("/");
+    crumbs+=' <span class="faint">/</span> <button onclick="go(\''+jsq(upto)+'\')">'+esc(p)+'</button>';
+  });
+
+  // Every cell carries data-label so the mobile layout can render each row as a card.
+  const rows=d.entries.map(e=>{
+    const isShared=!state.path&&state.shared[e.name];
+    const tags=[
+      '<span class="badge '+(e.ownership==="orphan"?"badge-warn":"badge-acc")+'">'+
+        (e.ownership==="orphan"?"unmanaged":(kind==="music"?"Lidarr":kind==="books"?"Kavita":"*arr"))+'</span>',
+      isShared?'<span class="badge badge-bad">'+state.shared[e.name].length+' artists share this folder</span>':""
+    ].join(" ");
+    const artists=e.artists&&e.artists.length
+      ?'<div class="artists">'+esc(e.artists.slice(0,4).join(", "))+
+        (e.artists.length>4?" +"+(e.artists.length-4):"")+'</div>':"";
+    const nameCell=e.is_dir
+      ? '<button class="name" onclick="go(\''+jsq(e.path)+'\')">'+esc(e.name)+'</button>'
+      : '<span class="breakable">'+esc(e.name)+'</span>';
+    return '<tr>'+
+      '<td data-label="Select"><input type="checkbox" value="'+esc(e.path)+'" onchange="pick(this)"'+
+        (state.selected.has(e.path)?" checked":"")+'></td>'+
+      '<td data-label="Name"><div class="cell-main">'+nameCell+' '+tags+'</div>'+artists+'</td>'+
+      '<td data-label="Files" class="num">'+(e.file_count||"")+'</td>'+
+      '<td data-label="Size" class="num">'+bytes(e.size)+'</td></tr>';
+  }).join("");
+
+  el.innerHTML=
+    '<div class="crumbs">'+crumbs+'</div>'+
+    '<div class="toolbar">'+
+      '<button class="btn btn-sm btn-danger" id="del" onclick="planDelete(\''+kind+'\')" disabled>Delete selected…</button>'+
+      '<span class="label" id="selnote">nothing selected</span>'+
+    '</div>'+
+    '<div class="table-wrap"><table class="hl"><thead><tr><th></th><th>Name</th>'+
+    '<th class="num">Files</th><th class="num">Size</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  updateSel();
+}
+
+function go(p){state.path=p;state.selected.clear();render();}
+function pick(cb){cb.checked?state.selected.add(cb.value):state.selected.delete(cb.value);updateSel();}
+function updateSel(){
+  const n=state.selected.size;
+  const b=document.getElementById("del"),s=document.getElementById("selnote");
+  if(b){b.disabled=!n;}
+  if(s){s.textContent=n?n+" selected":"nothing selected";}
+}
+
+async function planDelete(kind){
+  const paths=[...state.selected];
+  let plan;
+  try{
+    plan=await api("/api/"+kind+"/plan",{method:"POST",
+      headers:{"content-type":"application/json"},body:JSON.stringify({paths})});
+  }catch(e){ alert("Could not build a plan: "+e.message); return; }
+  showConfirm(plan,async()=>{
+    const r=await api("/api/"+kind+"/execute",{method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({paths:plan.paths,digest:plan.digest,
+        confirm:document.getElementById("dlg-input").value})});
+    return r;
+  });
+}
+
+function showConfirm(plan,run){
+  const dlg=document.getElementById("confirm");
+  const body=document.getElementById("dlg-body");
+  const input=document.getElementById("dlg-input");
+  const go=document.getElementById("dlg-go");
+  document.getElementById("dlg-title").textContent="Delete "+plan.paths.length+" item(s)";
+
+  const warns=plan.warnings.map(w=>
+    '<div class="warn'+(/Revert local changes|no undo/i.test(w)?" stop":"")+'">'+esc(w)+'</div>').join("");
+  const steps=plan.steps.map(s=>{
+    const shown=s.targets.slice(0,12).map(esc).join("\n");
+    const more=s.targets.length>12?"\n… and "+(s.targets.length-12)+" more":"";
+    return '<div class="step"><h4>'+esc(s.description)+'</h4>'+
+      '<div class="targets">'+shown+more+'</div></div>';
+  }).join("");
+  const linked=plan.linked_bytes
+    ? '<div><span>Hardlinked</span>'+bytes(plan.linked_bytes)+'</div>' : "";
+
+  body.innerHTML=warns+
+    '<div class="stat">'+
+      '<div><span>Files</span>'+plan.file_count+'</div>'+
+      '<div><span>Total</span>'+bytes(plan.total_bytes)+'</div>'+
+      '<div><span>Frees</span>'+bytes(plan.reclaimable_bytes)+'</div>'+linked+
+    '</div>'+steps;
+
+  input.value="";input.placeholder='type: '+plan.confirm_phrase;
+  go.disabled=true;
+  input.oninput=()=>{go.disabled=input.value!==plan.confirm_phrase;};
+
+  go.onclick=async(ev)=>{
+    ev.preventDefault();
+    go.disabled=true;go.textContent="Deleting…";
+    try{
+      const r=await run();
+      body.innerHTML='<div class="stat"><div><span>Freed</span>'+
+        bytes(r.reclaimable_bytes)+'</div><div><span>Files</span>'+r.file_count+'</div></div>'+
+        r.steps.map(s=>'<div class="step"><h4>'+esc(s.description)+
+          '</h4><div class="targets"><span class="st-'+esc(s.status)+'">'+esc(s.status)+
+          '</span> '+esc(s.detail||"")+'</div></div>').join("")+
+        '<div class="warn">Syncthing will now show local changes for this folder. '+
+        'Do NOT press “Revert local changes” — it would restore everything.</div>';
+    }catch(e){
+      body.innerHTML='<div class="warn stop">'+esc(e.message)+'</div>';
+    }
+    go.textContent="Done";go.value="cancel";go.disabled=false;
+    go.onclick=()=>{dlg.close();state.selected.clear();render();};
+  };
+  dlg.showModal();
+}
+
+// --- slskd leftovers ------------------------------------------------------
+async function renderSlskd(){
+  el.innerHTML='<div class="empty">loading download tree…</div>';
+  let d;
+  try{ d=await api("/api/slskd/leftovers"); }
+  catch(e){ el.innerHTML='<div class="warn stop">'+esc(e.message)+'</div>'; return; }
+  const rows=d.entries.map(e=>
+    '<tr><td data-label="Select">'+(e.protected?"":
+      '<input type="checkbox" value="'+esc(e.name)+'" onchange="pick(this)">')+'</td>'+
+    '<td data-label="Directory"><div class="cell-main"><span class="breakable">'+esc(e.name)+'</span>'+
+      (e.protected?' <span class="badge">protected</span>':"")+
+      (e.transfer_ids.length?' <span class="badge badge-info">'+e.transfer_ids.length+' slskd record(s)</span>':"")+'</div></td>'+
+    '<td data-label="Files" class="num">'+e.file_count+'</td>'+
+    '<td data-label="Age" class="num">'+e.age_days+'d</td>'+
+    '<td data-label="Size" class="num">'+bytes(e.size)+'</td></tr>').join("");
+  el.innerHTML=
+    '<p class="dim" style="margin-top:var(--s-4)">Downloads slskd already imported from. '+
+    'Deleting these does not touch the music library.</p>'+
+    '<div class="toolbar"><button class="btn btn-sm btn-danger" id="del" onclick="purge()" disabled>'+
+    'Purge selected…</button><span class="label" id="selnote">nothing selected</span>'+
+    '<span class="spacer"></span><span class="label">'+bytes(d.total_bytes)+' total</span></div>'+
+    '<div class="table-wrap"><table class="hl"><thead><tr><th></th><th>Directory</th>'+
+    '<th class="num">Files</th><th class="num">Age</th><th class="num">Size</th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  updateSel();
+}
+
+async function purge(){
+  const names=[...state.selected];
+  const phrase="PURGE "+names.length;
+  if(prompt("Delete "+names.length+" download folder(s)?\nType: "+phrase)!==phrase) return;
+  try{
+    const r=await api("/api/slskd/purge",{method:"POST",
+      headers:{"content-type":"application/json"},
+      body:JSON.stringify({names,confirm:phrase})});
+    alert("Freed "+bytes(r.freed_bytes));
+  }catch(e){ alert("Purge failed: "+e.message); }
+  state.selected.clear();render();
+}
+
+// --- audit ----------------------------------------------------------------
+async function renderAudit(){
+  el.innerHTML='<div class="empty">loading…</div>';
+  let d;
+  try{ d=await api("/api/audit?limit=100"); }
+  catch(e){ el.innerHTML='<div class="warn stop">'+esc(e.message)+'</div>'; return; }
+  if(!d.entries.length){ el.innerHTML='<div class="empty">no deletions recorded yet</div>'; return; }
+  el.innerHTML='<p class="dim" style="margin-top:var(--s-4)">Newest first. This is the only '+
+    'record — there is no trash directory.</p><pre class="audit">'+
+    esc(JSON.stringify(d.entries,null,2))+'</pre>';
+}
+
+render();
+</script>
+</body>
+</html>

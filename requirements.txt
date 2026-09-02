@@ -1,0 +1,8 @@
+# Runtime dependencies are pinned so image rebuilds remain reproducible.
+fastapi==0.140.0
+uvicorn[standard]==0.51.0
+httpx==0.28.1
+# Required by Starlette's request.form() for the login form. Starlette asserts
+# the parser is importable *before* it looks at the content type, so even a plain
+# application/x-www-form-urlencoded post needs it present.
+python-multipart==0.0.32

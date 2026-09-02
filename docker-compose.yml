@@ -1,0 +1,50 @@
+services:
+  librarian:
+    build: .
+    container_name: librarian
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    ports:
+      - "127.0.0.1:${LIBRARIAN_PORT:-8300}:8300"
+    environment:
+      LIBRARIAN_BASIC_USER: "${LIBRARIAN_BASIC_USER:?set LIBRARIAN_BASIC_USER in .env}"
+      LIBRARIAN_BASIC_PASS: "${LIBRARIAN_BASIC_PASS:?set LIBRARIAN_BASIC_PASS in .env}"
+      LIBRARIAN_COOKIE_SECURE: "${LIBRARIAN_COOKIE_SECURE:-true}"
+      LIBRARIAN_CONFIG: /config
+      MUSIC_ROOT: /music
+      VIDEO_ROOT: /data
+      BOOKS_ROOT: /books
+      SLSKD_DOWNLOADS_ROOT: /slskd-downloads
+      LIDARR_URL: "${LIDARR_URL:-http://lidarr:8686}"
+      LIDARR_API_KEY: "${LIDARR_API_KEY:-}"
+      LIDARR_MUSIC_ROOT: "${LIDARR_MUSIC_ROOT:-/music}"
+      RADARR_URL: "${RADARR_URL:-http://radarr:7878}"
+      RADARR_API_KEY: "${RADARR_API_KEY:-}"
+      SONARR_URL: "${SONARR_URL:-http://sonarr:8989}"
+      SONARR_API_KEY: "${SONARR_API_KEY:-}"
+      ARR_MEDIA_ROOT: "${ARR_MEDIA_ROOT:-/data}"
+      SLSKD_URL: "${SLSKD_URL:-http://slskd:5030}"
+      SLSKD_API_KEY: "${SLSKD_API_KEY:-}"
+    volumes:
+      - "${LIBRARIAN_CONFIG_PATH:-./data/config}:/config"
+      - "${MUSIC_PATH:-./data/music}:/music"
+      - "${VIDEO_PATH:-./data/video}:/data"
+      - "${BOOKS_PATH:-./data/books}:/books"
+      - "${SLSKD_DOWNLOADS_PATH:-./data/slskd-downloads}:/slskd-downloads"
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8300/healthz', timeout=3).read()"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
