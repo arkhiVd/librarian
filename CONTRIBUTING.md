@@ -17,6 +17,7 @@ When a production dependency changes, edit `requirements.in` and regenerate the 
 
 ```bash
 uv pip compile --generate-hashes --output-file requirements.txt requirements.in
+uv pip compile --generate-hashes --output-file requirements-dev.txt requirements-dev.in
 ```
 
 Do not submit credentials, production configuration, audit logs, databases, media, downloaded course material, or screenshots containing personal data.
