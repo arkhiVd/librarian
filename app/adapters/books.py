@@ -158,7 +158,12 @@ class BooksAdapter:
 
         from app.adapters.music import MusicAdapter  # shared digest implementation
 
-        digest = MusicAdapter._digest(pruned, files, steps)
+        digest_targets = [
+            *files,
+            *(self.root / original for original in originals),
+            *(self.root / rel for rel in pruned),
+        ]
+        digest = MusicAdapter._digest(pruned, digest_targets, steps)
         confirm = Path(pruned[0]).name if len(pruned) == 1 else f"DELETE {len(pruned)} items"
         return DeletePlan(
             library=self.key,

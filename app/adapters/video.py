@@ -249,7 +249,9 @@ class VideoAdapter:
 
         from app.adapters.music import MusicAdapter  # shared digest implementation
 
-        digest = MusicAdapter._digest(pruned, files, steps)
+        hardlink_targets = [self.root / rel for paths in siblings.values() for rel in paths]
+        digest_targets = [*files, *hardlink_targets, *(self.root / rel for rel in pruned)]
+        digest = MusicAdapter._digest(pruned, digest_targets, steps)
         confirm = Path(pruned[0]).name if len(pruned) == 1 else f"DELETE {len(pruned)} items"
         return DeletePlan(
             library=self.key,

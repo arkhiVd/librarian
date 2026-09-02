@@ -1,10 +1,11 @@
 """Video adapter tests.
 
-The hardlink path is the reason this phase exists and there are no hardlinks on the real
-box, so it is exercised here with real `os.link` calls against a tmpdir rather than mocks.
+Hardlink behavior uses real filesystem links inside a temporary directory rather than mocks.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
@@ -45,9 +46,9 @@ class FakeArr:
 def media(tmp_path):
     root = tmp_path / "media"
     for rel, size in (
-        ("movies/Dridam (2026)/Dridam.mkv", 800),
-        ("movies/Dridam (2026)/poster.jpg", 20),
-        ("tv/Show/Season 01/Show S01E01.mkv", 400),
+        ("movies/Example Movie/Example Movie.mkv", 800),
+        ("movies/Example Movie/poster.jpg", 20),
+        ("tv/Example Show/Season 01/Example Show S01E01.mkv", 400),
         ("downloads/complete/other.mkv", 50),
     ):
         t = root / rel
@@ -60,12 +61,21 @@ def media(tmp_path):
 def adapter(media):
     radarr = FakeArr(
         "radarr",
-        [MediaFile(1, "/data/movies/Dridam (2026)/Dridam.mkv", 800, 10, "Dridam")],
+        [MediaFile(1, "/data/movies/Example Movie/Example Movie.mkv", 800, 10, "Example Movie")],
         media,
     )
     sonarr = FakeArr(
         "sonarr",
-        [MediaFile(2, "/data/tv/Show/Season 01/Show S01E01.mkv", 400, 20, "Show", (99,))],
+        [
+            MediaFile(
+                2,
+                "/data/tv/Example Show/Season 01/Example Show S01E01.mkv",
+                400,
+                20,
+                "Example Show",
+                (99,),
+            )
+        ],
         media,
     )
     return VideoAdapter(root=media, clients={"radarr": radarr, "sonarr": sonarr}, arr_root="/data")
@@ -79,24 +89,24 @@ def test_tree_tags_radarr_and_sonarr_files_as_managed(adapter):
 
 
 def test_movie_plan_routes_to_radarr_and_unmonitors_the_movie(adapter):
-    plan = adapter.plan(["movies/Dridam (2026)"])
+    plan = adapter.plan(["movies/Example Movie"])
     kinds = {s.kind: s for s in plan.steps}
     assert kinds["unmonitor_radarr"].targets == ["10"]
     assert kinds["delete_files_radarr"].targets == ["1"]
-    assert kinds["unlink"].targets == ["movies/Dridam (2026)/poster.jpg"]
+    assert kinds["unlink"].targets == ["movies/Example Movie/poster.jpg"]
     assert "unmonitor_sonarr" not in kinds
 
 
 def test_episode_plan_unmonitors_episodes_not_the_series(adapter):
     """A series stays monitored for episodes never grabbed, so Sonarr needs episode ids."""
-    plan = adapter.plan(["tv/Show"])
+    plan = adapter.plan(["tv/Example Show"])
     kinds = {s.kind: s for s in plan.steps}
     assert kinds["unmonitor_sonarr"].targets == ["99"]
     assert kinds["delete_files_sonarr"].targets == ["2"]
 
 
 def test_a_selection_spanning_both_managers_produces_steps_for_each(adapter):
-    plan = adapter.plan(["movies/Dridam (2026)", "tv/Show"])
+    plan = adapter.plan(["movies/Example Movie", "tv/Example Show"])
     kinds = {s.kind for s in plan.steps}
     assert {
         "unmonitor_radarr",
@@ -110,11 +120,11 @@ def test_a_selection_spanning_both_managers_produces_steps_for_each(adapter):
 
 
 def test_hardlinked_file_reports_the_download_side_link(adapter, media):
-    link = media / "downloads" / "complete" / "Dridam.mkv"
-    link.hardlink_to(media / "movies" / "Dridam (2026)" / "Dridam.mkv")
-    plan = adapter.plan(["movies/Dridam (2026)"])
+    link = media / "downloads" / "complete" / "Example Movie.mkv"
+    link.hardlink_to(media / "movies" / "Example Movie" / "Example Movie.mkv")
+    plan = adapter.plan(["movies/Example Movie"])
     step = next(s for s in plan.steps if s.kind == "unlink_hardlinks")
-    assert step.targets == ["downloads/complete/Dridam.mkv"]
+    assert step.targets == ["downloads/complete/Example Movie.mkv"]
     assert plan.linked_bytes == 800
     # With the sibling scheduled for removal the space really is reclaimable.
     assert plan.reclaimable_bytes == 820
@@ -122,19 +132,19 @@ def test_hardlinked_file_reports_the_download_side_link(adapter, media):
 
 
 def test_deleting_a_hardlinked_movie_removes_both_links(adapter, media):
-    link = media / "downloads" / "complete" / "Dridam.mkv"
-    link.hardlink_to(media / "movies" / "Dridam (2026)" / "Dridam.mkv")
-    result = adapter.execute(adapter.plan(["movies/Dridam (2026)"]))
+    link = media / "downloads" / "complete" / "Example Movie.mkv"
+    link.hardlink_to(media / "movies" / "Example Movie" / "Example Movie.mkv")
+    result = adapter.execute(adapter.plan(["movies/Example Movie"]))
     assert all(s.status == "ok" for s in result.steps)
-    assert not (media / "movies" / "Dridam (2026)").exists()
+    assert not (media / "movies" / "Example Movie").exists()
     assert not link.exists(), "the download-side link survived; space was not freed"
 
 
 def test_unlinked_file_does_not_claim_reclaimable_space_it_cannot_free(adapter, media, tmp_path):
     """A link outside the searched download roots means the bytes are NOT reclaimed."""
     outside = tmp_path / "elsewhere.mkv"
-    outside.hardlink_to(media / "movies" / "Dridam (2026)" / "Dridam.mkv")
-    plan = adapter.plan(["movies/Dridam (2026)"])
+    outside.hardlink_to(media / "movies" / "Example Movie" / "Example Movie.mkv")
+    plan = adapter.plan(["movies/Example Movie"])
     assert not any(s.kind == "unlink_hardlinks" for s in plan.steps)
     assert plan.linked_bytes == 800
     assert plan.reclaimable_bytes == 20  # only the poster
@@ -142,19 +152,35 @@ def test_unlinked_file_does_not_claim_reclaimable_space_it_cannot_free(adapter, 
 
 
 def test_no_hardlinks_means_no_extra_step_and_no_scan(adapter):
-    plan = adapter.plan(["movies/Dridam (2026)"])
+    plan = adapter.plan(["movies/Example Movie"])
     assert not any(s.kind == "unlink_hardlinks" for s in plan.steps)
     assert plan.linked_bytes == 0
     assert plan.reclaimable_bytes == plan.total_bytes
+
+
+def test_replaced_download_hardlink_invalidates_plan(adapter, media):
+    link = media / "downloads" / "complete" / "Example Movie.mkv"
+    link.hardlink_to(media / "movies" / "Example Movie" / "Example Movie.mkv")
+    approved = adapter.plan(["movies/Example Movie"])
+    original = link.stat()
+    replacement = link.with_suffix(".replacement")
+    replacement.write_bytes(b"y" * original.st_size)
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    replacement.replace(link)
+    os.utime(link, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    with pytest.raises(StalePlanError):
+        adapter.execute(approved)
+    assert link.exists()
 
 
 # --- shared guarantees ------------------------------------------------------
 
 
 def test_digest_covers_arr_derived_steps(adapter):
-    approved = adapter.plan(["movies/Dridam (2026)"])
+    approved = adapter.plan(["movies/Example Movie"])
     adapter._clients["radarr"]._files = []
-    changed = adapter.plan(["movies/Dridam (2026)"])
+    changed = adapter.plan(["movies/Example Movie"])
     assert changed.digest != approved.digest
     with pytest.raises(StalePlanError):
         adapter.execute(approved)
@@ -162,10 +188,10 @@ def test_digest_covers_arr_derived_steps(adapter):
 
 def test_a_failing_arr_step_is_reported_not_raised(adapter, media):
     adapter._clients["radarr"].fail = True
-    result = adapter.execute(adapter.plan(["movies/Dridam (2026)"]))
+    result = adapter.execute(adapter.plan(["movies/Example Movie"]))
     failed = next(s for s in result.steps if s.kind == "delete_files_radarr")
     assert failed.status == "failed"
-    assert (media / "movies" / "Dridam (2026)" / "Dridam.mkv").exists()
+    assert (media / "movies" / "Example Movie" / "Example Movie.mkv").exists()
 
 
 def test_path_jail_applies_to_the_video_root(adapter):

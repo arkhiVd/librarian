@@ -1,7 +1,7 @@
 """Regression tests for security and correctness findings from independent review.
 
-Each test reproduces a finding that was proven against the real adapter. They exist to
-stop the fix silently regressing, so they assert the behaviour, not the implementation.
+Each test reproduces a reviewed failure mode and asserts behavior rather than a private
+implementation detail.
 """
 
 from __future__ import annotations
@@ -67,7 +67,23 @@ def test_execute_refuses_a_plan_whose_lidarr_steps_changed(library):
     assert (library / "Artist" / "a.mp3").exists()
 
 
-# --- 2. MEDIUM: intent must be recorded before the destructive steps --------
+def test_replaced_file_with_same_size_and_mtime_invalidates_plan(library):
+    target = library / "Artist" / "a.mp3"
+    adapter = MusicAdapter(root=library, client=RecordingLidarr([], library), lidarr_root="/music")
+    approved = adapter.plan(["Artist/a.mp3"])
+    original = target.stat()
+    replacement = target.with_suffix(".replacement")
+    replacement.write_bytes(b"y" * original.st_size)
+    os.utime(replacement, ns=(original.st_atime_ns, original.st_mtime_ns))
+    replacement.replace(target)
+    os.utime(target, ns=(original.st_atime_ns, original.st_mtime_ns))
+
+    with pytest.raises(StalePlanError):
+        adapter.execute(approved)
+    assert target.exists()
+
+
+# --- 2. HIGH: intent must be recorded before the destructive steps ----------
 
 
 def test_intent_is_written_before_execution_so_a_crash_leaves_a_trace(library, tmp_path):
@@ -98,6 +114,27 @@ def test_intent_and_outcome_pair_up_on_a_normal_run(library, tmp_path):
     assert events == ["intent", "outcome"]
 
 
+def test_unwritable_intent_raises_and_aborts_execution(library, tmp_path, monkeypatch):
+    from app import main
+
+    client = RecordingLidarr([], library)
+    adapter = MusicAdapter(root=library, client=client, lidarr_root="/music")
+    plan = adapter.plan(["Artist"])
+    blocker = tmp_path / "not-a-directory"
+    blocker.write_text("x")
+
+    monkeypatch.setattr(main, "get_music_adapter", lambda: adapter)
+    monkeypatch.setattr(main, "_audit_path", lambda: blocker / "audit.log")
+    request = main.ExecuteRequest(paths=plan.paths, digest=plan.digest, confirm=plan.confirm_phrase)
+
+    with pytest.raises(main.HTTPException) as exc_info:
+        main.music_execute(request, user="tester")
+    assert exc_info.value.status_code == 507
+    assert client.deleted_ids == []
+    assert (library / "Artist" / "a.mp3").exists()
+    assert (library / "Artist" / "b.mp3").exists()
+
+
 # --- 3. MEDIUM: failed_imports protection was bypassable --------------------
 
 
@@ -125,8 +162,8 @@ def downloads(tmp_path):
 def test_protected_directory_cannot_be_reached_by_any_spelling(downloads, name):
     (downloads / "sub").mkdir(exist_ok=True)
     adapter = DownloadsAdapter(root=downloads, client=FakeSlskd())
-    outcome = adapter.purge([name])
-    assert "refused" in outcome[name], f"{name!r} bypassed the protection"
+    with pytest.raises(ValueError, match="protected"):
+        adapter.plan([name])
     assert (downloads / "failed_imports").exists()
     assert (downloads / "failed_imports" / "junk.mp3").exists()
 

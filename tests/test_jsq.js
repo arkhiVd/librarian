@@ -39,16 +39,16 @@ check("backslash is escaped first", jsq("a\\b"), "a\\\\b");
 check("tags in markup", esc("<img src=x onerror=alert(1)>"),
   "&lt;img src=x onerror=alert(1)&gt;");
 check("quotes in attributes", esc('a"b'), "a&quot;b");
-check("ampersand once", esc("Simon & Garfunkel"), "Simon &amp; Garfunkel");
+check("ampersand once", esc("Example A & B"), "Example A &amp; B");
 
-// Real paths from this library: Windows separators and en-dashes must survive.
-check("en dash untouched", esc("Mercury – Act 2 (2022)"), "Mercury – Act 2 (2022)");
+// Synthetic path forms: Windows separators and en dashes must survive.
+check("en dash untouched", esc("Example – Part 2"), "Example – Part 2");
 check("nulls and empties", esc(null) + esc(undefined) + esc(""), "");
 
 // A path with an apostrophe must round-trip through an onclick handler.
-const handler = `<button onclick="go('${jsq("Guns N' Roses/Appetite")}')">`;
+const handler = `<button onclick="go('${jsq("Example O'Artist/Album")}')">`;
 check("handler stays single-quoted",
-  handler, `<button onclick="go('Guns N\\&#39; Roses/Appetite')">`);
+  handler, `<button onclick="go('Example O\\&#39;Artist/Album')">`);
 
 if (failures) {
   console.error(`\n${failures} escaping test(s) failed`);

@@ -248,8 +248,8 @@ function showConfirm(plan,run){
         r.steps.map(s=>'<div class="step"><h4>'+esc(s.description)+
           '</h4><div class="targets"><span class="st-'+esc(s.status)+'">'+esc(s.status)+
           '</span> '+esc(s.detail||"")+'</div></div>').join("")+
-        '<div class="warn">Syncthing will now show local changes for this folder. '+
-        'Do NOT press “Revert local changes” — it would restore everything.</div>';
+        (plan.library==="music"?'<div class="warn">Syncthing may show local changes for this '+
+          'folder. Do not revert them unless you intend to restore the deleted files.</div>':"");
     }catch(e){
       body.innerHTML='<div class="warn stop">'+esc(e.message)+'</div>';
     }
@@ -277,26 +277,13 @@ async function renderSlskd(){
   el.innerHTML=
     '<p class="dim" style="margin-top:var(--s-4)">Downloads slskd already imported from. '+
     'Deleting these does not touch the music library.</p>'+
-    '<div class="toolbar"><button class="btn btn-sm btn-danger" id="del" onclick="purge()" disabled>'+
+    '<div class="toolbar"><button class="btn btn-sm btn-danger" id="del" onclick="planDelete(\'slskd\')" disabled>'+
     'Purge selected…</button><span class="label" id="selnote">nothing selected</span>'+
     '<span class="spacer"></span><span class="label">'+bytes(d.total_bytes)+' total</span></div>'+
     '<div class="table-wrap"><table class="hl"><thead><tr><th></th><th>Directory</th>'+
     '<th class="num">Files</th><th class="num">Age</th><th class="num">Size</th>'+
     '</tr></thead><tbody>'+rows+'</tbody></table></div>';
   updateSel();
-}
-
-async function purge(){
-  const names=[...state.selected];
-  const phrase="PURGE "+names.length;
-  if(prompt("Delete "+names.length+" download folder(s)?\nType: "+phrase)!==phrase) return;
-  try{
-    const r=await api("/api/slskd/purge",{method:"POST",
-      headers:{"content-type":"application/json"},
-      body:JSON.stringify({names,confirm:phrase})});
-    alert("Freed "+bytes(r.freed_bytes));
-  }catch(e){ alert("Purge failed: "+e.message); }
-  state.selected.clear();render();
 }
 
 // --- audit ----------------------------------------------------------------

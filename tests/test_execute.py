@@ -43,7 +43,7 @@ class RecordingLidarr(FakeLidarr):
 
 @pytest.fixture
 def library(tmp_path):
-    """Mirrors Example Artist D' real shape: one loose track in the shared Shared folder."""
+    """Create one loose track beside another artist in a shared directory."""
     root = tmp_path / "music"
     for rel, size in (
         ("Shared/loose-track.opus", 100),  # Example Artist D, loose in the junk drawer
@@ -112,9 +112,7 @@ def test_deleting_the_last_album_prunes_the_artist_directory_too(adapter, librar
 
 
 def test_deleting_the_last_file_in_a_directory_prunes_it(adapter, library):
-    """A *file* target: by sweep time it is already gone, so the code must walk up to
-    its parent. It did not, and the parent was silently left behind — caught on the
-    first real deletion, in /music/Shared."""
+    """A file target is gone by sweep time, so pruning must start at its parent."""
     lonely = library / "Example Artist D" / "Second Album" / "01.opus"
     assert lonely.exists()
     run(adapter, ["Example Artist D/Second Album/01.opus"])
@@ -123,12 +121,7 @@ def test_deleting_the_last_file_in_a_directory_prunes_it(adapter, library):
 
 
 def test_nested_empty_directories_are_pruned_bottom_up(adapter, library):
-    """An artist folder is not empty while it still holds empty album folders.
-
-    Caught on the real Example Artist D deletion: every file went, but 7 empty
-    directories survived because the sweep only ever walked upward. Smoke + Mirrors
-    nests further still ("12 Vinyl 01"/"12 Vinyl 02").
-    """
+    """Remove nested empty album directories after every selected file is gone."""
     deep = library / "Example Artist D" / "Second Album" / "12 Vinyl 01"
     deep.mkdir(parents=True, exist_ok=True)
     (deep / "extra.opus").write_bytes(b"d" * 5)
@@ -138,7 +131,7 @@ def test_nested_empty_directories_are_pruned_bottom_up(adapter, library):
 
 
 def test_partial_artist_delete_does_not_retire_the_artist(adapter):
-    """Evolve goes, LOOM stays — Example Artist D is still wanted."""
+    """First Album goes, Second Album stays — Example Artist D is still wanted."""
     result = run(adapter, ["Example Artist D/First Album"])
     assert "retire_artist" not in {s.kind for s in result.steps}
     assert adapter._client.retired == []
@@ -158,7 +151,7 @@ def test_removing_an_artists_last_file_retires_them(adapter, library):
     assert retire.status == "ok"
     assert retire.targets == ["21:Example Artist D"]
     assert adapter._client.retired == [21]
-    # Kendrick still has a file in Shared, so he is untouched.
+    # Example Artist A still has a file in Shared, so he is untouched.
     assert 1 not in adapter._client.retired
 
 

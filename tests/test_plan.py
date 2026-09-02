@@ -21,7 +21,7 @@ def library(tmp_path):
         ("Example Artist A/Album One/01.opus", 100),
         ("Shared/Album Two/01.opus", 200),
         ("Shared/Album Three/01.opus", 300),
-        ("Shared/Pray for Paris/01.opus", 400),  # orphan sitting in the junk drawer
+        ("Shared/Orphan Album/01.opus", 400),  # orphan sitting in the junk drawer
         ("Example Artist C/Album Four/01.opus", 500),
     ):
         target = root / rel
@@ -53,7 +53,7 @@ def test_deleting_one_album_inside_a_shared_folder_touches_only_that_album(adapt
     assert plan.file_count == 1
     assert plan.total_bytes == 300
     targets = {t for step in plan.steps for t in step.targets}
-    assert not any("good kid" in t or "Pray for Paris" in t for t in targets)
+    assert not any("Album Two" in t or "Orphan Album" in t for t in targets)
 
 
 def test_plan_separates_managed_files_from_orphans(adapter):
@@ -64,7 +64,7 @@ def test_plan_separates_managed_files_from_orphans(adapter):
         "Shared/Album Three/01.opus",
         "Shared/Album Two/01.opus",
     ]
-    assert kinds["unlink"].targets == ["Shared/Pray for Paris/01.opus"]
+    assert kinds["unlink"].targets == ["Shared/Orphan Album/01.opus"]
     assert plan.total_bytes == 900
 
 

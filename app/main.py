@@ -15,7 +15,7 @@ import secrets
 import time
 from html import escape
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, status
 from fastapi.responses import (
@@ -29,7 +29,7 @@ from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from pydantic import BaseModel, Field
 
 from app import audit
-from app.adapters.base import StalePlanError
+from app.adapters.base import DeletePlan, StalePlanError
 from app.adapters.books import BooksAdapter
 from app.adapters.downloads import DownloadsAdapter
 from app.adapters.music import MusicAdapter
@@ -98,13 +98,16 @@ class ExecuteRequest(PlanRequest):
     confirm: str
 
 
-class PurgeRequest(BaseModel):
-    names: list[str] = Field(min_length=1, max_length=500)
-    confirm: str
-
-
 def _audit_path() -> Path:
     return Path(os.environ.get("LIBRARIAN_CONFIG", "/config")) / "audit.log"
+
+
+def _record_intent(plan: DeletePlan, *, actor: str, confirmed: str) -> None:
+    """Store intent durably or stop before any destructive operation."""
+    try:
+        audit.record_intent(_audit_path(), plan, actor=actor, confirmed=confirmed)
+    except audit.AuditWriteError as exc:
+        raise HTTPException(status_code=507, detail=str(exc)) from exc
 
 
 def _expected_credentials() -> tuple[str, str]:
@@ -431,7 +434,7 @@ def music_execute(body: ExecuteRequest, user: str = Depends(require_auth)) -> di
         # Written BEFORE the first destructive call. If the process dies mid-execute the
         # files are gone either way; an intent line with no matching outcome is what tells
         # a later investigation that librarian was interrupted rather than never involved.
-        audit.record_intent(_audit_path(), proposed, actor=user, confirmed=body.confirm)
+        _record_intent(proposed, actor=user, confirmed=body.confirm)
         try:
             result = adapter.execute(proposed, index=index)
         except StalePlanError as exc:
@@ -497,7 +500,7 @@ def video_execute(body: ExecuteRequest, user: str = Depends(require_auth)) -> di
                 status_code=409,
                 detail="the library changed since this plan was built; re-plan first",
             )
-        audit.record_intent(_audit_path(), proposed, actor=user, confirmed=body.confirm)
+        _record_intent(proposed, actor=user, confirmed=body.confirm)
         try:
             result = adapter.execute(proposed, index=index)
         except StalePlanError as exc:
@@ -544,7 +547,7 @@ def books_execute(body: ExecuteRequest, user: str = Depends(require_auth)) -> di
         raise HTTPException(
             status_code=409, detail="the library changed since this plan was built; re-plan first"
         )
-    audit.record_intent(_audit_path(), proposed, actor=user, confirmed=body.confirm)
+    _record_intent(proposed, actor=user, confirmed=body.confirm)
     try:
         result = adapter.execute(proposed)
     except StalePlanError as exc:
@@ -570,25 +573,47 @@ def slskd_leftovers(
     }
 
 
-@app.post("/api/slskd/purge")
-def slskd_purge(body: PurgeRequest, user: str = Depends(require_auth)) -> dict:
-    """Delete named leftover directories and clear their slskd transfer records."""
+@app.post("/api/slskd/plan")
+def slskd_plan(body: PlanRequest, _user: str = Depends(require_auth)) -> dict:
+    """Preview directory deletion and matching slskd record cleanup."""
     adapter = get_downloads_adapter()
     try:
-        before = {i.name: i for i in adapter.leftovers()}
-        if body.confirm != f"PURGE {len(body.names)}":
-            raise HTTPException(
-                status_code=400, detail=f"confirmation must be 'PURGE {len(body.names)}'"
-            )
-        outcome = adapter.purge(body.names)
+        plan = adapter.plan(body.paths)
+    except (PathJailError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     finally:
         adapter.close()
+    return dataclasses.asdict(plan)
 
-    freed = sum(
-        before[n].size for n in body.names if n in before and "deleted" in outcome.get(n, "")
-    )
-    audit.record_purge(_audit_path(), body.names, outcome, freed, actor=user)
-    return {"outcome": outcome, "freed_bytes": freed}
+
+@app.post("/api/slskd/execute")
+def slskd_execute(body: ExecuteRequest, user: str = Depends(require_auth)) -> dict:
+    """Execute a current, confirmed slskd cleanup plan."""
+    adapter = get_downloads_adapter()
+    try:
+        try:
+            proposed = adapter.plan(body.paths)
+        except (PathJailError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if body.confirm != proposed.confirm_phrase:
+            raise HTTPException(
+                status_code=400,
+                detail=f"confirmation must be exactly {proposed.confirm_phrase!r}",
+            )
+        if body.digest != proposed.digest:
+            raise HTTPException(
+                status_code=409,
+                detail="the download tree changed since this plan was built; re-plan first",
+            )
+        _record_intent(proposed, actor=user, confirmed=body.confirm)
+        try:
+            result = adapter.execute(proposed)
+        except StalePlanError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        adapter.close()
+    audit.record(_audit_path(), result, actor=user, confirmed=body.confirm)
+    return dataclasses.asdict(result)
 
 
 @app.get("/api/audit")
@@ -665,13 +690,23 @@ async def login_submit(request: Request) -> Response:
     return response
 
 
+def _require_same_origin(request: Request) -> None:
+    """Reject cross-origin browser posts to the global logout endpoint."""
+    origin = request.headers.get("origin", "")
+    parsed = urlsplit(origin)
+    host = request.headers.get("host", "").lower()
+    if parsed.scheme not in {"http", "https"} or parsed.netloc.lower() != host:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="invalid origin")
+
+
 @app.post("/logout")
-def logout() -> Response:
+def logout(request: Request, _user: str = Depends(require_auth)) -> Response:
     """Sign out, and actually invalidate the token.
 
     Clearing the cookie alone only asks the browser to forget it. A token captured
     beforehand would otherwise keep delete access for the rest of its 30 days.
     """
+    _require_same_origin(request)
     _revoke_all_sessions()
     response = RedirectResponse("/login", status_code=status.HTTP_303_SEE_OTHER)
     response.delete_cookie(

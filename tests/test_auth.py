@@ -77,6 +77,7 @@ def test_unconfigured_service_fails_closed(monkeypatch):
 # page added alongside it.
 
 HTML = {"Accept": "text/html,application/xhtml+xml"}
+SAME_ORIGIN = {"Origin": "http://testserver"}
 
 
 def _login(client, user=USER, password=PASSWORD, next_path=None):
@@ -89,12 +90,9 @@ def _login(client, user=USER, password=PASSWORD, next_path=None):
 def test_every_route_except_the_open_ones_requires_auth(client):
     """Walk the app's own route table rather than naming endpoints by hand.
 
-    Written after a review demonstrated that `Depends(require_auth)` could be deleted
-    from `music_execute` AND `slskd_purge` — the two endpoints that permanently delete
-    media — with all 126 tests still green. Nothing asserted those routes were
-    authenticated: this file only ever exercised /, /healthz, /login, /logout and
-    /api/audit, and every other test file works at the adapter level with no
-    TestClient at all.
+    Written after a review demonstrated that authentication could be deleted from
+    destructive endpoints while all existing tests stayed green. Nothing asserted
+    those routes were protected because most adapter tests do not use TestClient.
 
     Listing routes explicitly would have the same blind spot, because a new endpoint
     would simply not be listed. Enumerating from `app.routes` means a route added
@@ -103,7 +101,7 @@ def test_every_route_except_the_open_ones_requires_auth(client):
     """
     from fastapi.routing import APIRoute
 
-    open_paths = {"/healthz", "/librarian.css", "/login", "/logout"}
+    open_paths = {"/healthz", "/librarian.css", "/login"}
     checked = 0
     for route in app.routes:
         if not isinstance(route, APIRoute) or route.path in open_paths:
@@ -216,24 +214,35 @@ def test_bad_login_returns_the_form_with_an_error_and_no_cookie(client):
     assert "Incorrect username or password." in response.text
 
 
+def test_logout_requires_authentication(client):
+    response = client.post("/logout", headers=SAME_ORIGIN, follow_redirects=False)
+    assert response.status_code == 401
+
+
+def test_logout_rejects_cross_origin_requests(client):
+    _login(client)
+    response = client.post(
+        "/logout",
+        headers={"Origin": "https://attacker.example"},
+        follow_redirects=False,
+    )
+    assert response.status_code == 403
+    assert client.get("/api/audit").status_code == 200
+
+
 def test_logout_clears_the_session(client):
     _login(client)
     assert client.get("/", headers=HTML).status_code == 200
-    response = client.post("/logout", follow_redirects=False)
+    response = client.post("/logout", headers=SAME_ORIGIN, follow_redirects=False)
     assert response.status_code == 303
     assert response.headers["location"] == "/login"
     assert client.get("/", headers=HTML, follow_redirects=False).status_code == 303
 
 
 def test_logout_invalidates_a_token_captured_beforehand(client):
-    """The test above only proves the *client* dropped its cookie.
-
-    It passed while logout did nothing but `delete_cookie`, so a token copied before
-    signing out kept working for the remaining 30 days. On plain HTTP, for a service
-    that deletes media, "sign out" has to mean the token is dead.
-    """
+    """A token copied before logout must not retain delete access."""
     token = _login(client).cookies["librarian_session"]
-    client.post("/logout", follow_redirects=False)
+    client.post("/logout", headers=SAME_ORIGIN, follow_redirects=False)
 
     client.cookies.set("librarian_session", token)
     assert client.get("/api/audit", follow_redirects=False).status_code == 401
@@ -242,7 +251,7 @@ def test_logout_invalidates_a_token_captured_beforehand(client):
 def test_logging_in_again_after_logout_works(client):
     """Revocation is by issue time, so a fresh login must not be caught by it."""
     _login(client)
-    client.post("/logout", follow_redirects=False)
+    client.post("/logout", headers=SAME_ORIGIN, follow_redirects=False)
     client.cookies.clear()
 
     response = _login(client)

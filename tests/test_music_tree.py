@@ -1,7 +1,7 @@
 """Music adapter tests.
 
-The cases that matter are the ones the real library exhibits: files that live outside
-their artist's folder, and a single directory holding several artists.
+The synthetic fixtures cover files outside an artist folder and a directory shared by
+several artists.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ class FakeLidarr:
 
 @pytest.fixture
 def library(tmp_path):
-    """Mirrors the shape of the real /music, including the Shared junk drawer."""
+    """Create a synthetic library with one directory shared by several artists."""
     root = tmp_path / "music"
     for rel in (
         "Example Artist A/Album One/01.opus",
@@ -63,9 +63,9 @@ def test_root_tree_tags_managed_and_orphan(adapter):
 
 
 def test_managed_entry_carries_the_ids_a_delete_would_use(adapter):
-    kendrick = next(e for e in adapter.tree("") if e.name == "Example Artist A")
-    assert kendrick.track_file_ids == [1]
-    assert kendrick.album_ids == [10]
+    example_artist = next(e for e in adapter.tree("") if e.name == "Example Artist A")
+    assert example_artist.track_file_ids == [1]
+    assert example_artist.album_ids == [10]
 
 
 def test_junk_drawer_directory_reports_every_artist_inside_it(adapter):

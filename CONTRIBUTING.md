@@ -13,4 +13,10 @@ Changes are welcome when they preserve Librarian's deletion safeguards.
 
 New routes must require authentication unless `SPEC.md` explicitly defines them as public. New delete paths must pass through `resolve_target`. Any field that changes an action or its targets must be covered by the plan digest.
 
+When a production dependency changes, edit `requirements.in` and regenerate the hashed lock with:
+
+```bash
+uv pip compile --generate-hashes --output-file requirements.txt requirements.in
+```
+
 Do not submit credentials, production configuration, audit logs, databases, media, downloaded course material, or screenshots containing personal data.

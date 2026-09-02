@@ -19,6 +19,10 @@ from app.adapters.base import DeletePlan
 log = logging.getLogger(__name__)
 
 
+class AuditWriteError(RuntimeError):
+    """The pre-delete audit intent could not be stored durably."""
+
+
 def record_intent(path: Path, plan: DeletePlan, actor: str, confirmed: str) -> None:
     """Write what is *about* to be deleted, before the first destructive call.
 
@@ -41,6 +45,7 @@ def record_intent(path: Path, plan: DeletePlan, actor: str, confirmed: str) -> N
             "total_bytes": plan.total_bytes,
             "steps": [{"kind": s.kind, "targets": s.targets} for s in plan.steps],
         },
+        strict=True,
     )
 
 
@@ -70,13 +75,12 @@ def _rotate_if_needed(path: Path) -> None:
         log.exception("audit rotation failed for %s", path)
 
 
-def _append(path: Path, entry: dict) -> None:
-    """Append one JSONL record, fsynced.
+def _append(path: Path, entry: dict, *, strict: bool = False) -> None:
+    """Append and fsync one JSONL record.
 
-    A write failure is logged loudly and swallowed. For `outcome` the deletion has
-    already happened, so raising would misreport it as failed; for `intent` the same
-    choice keeps an unwritable log from blocking a deletion the user explicitly asked
-    for — the loud log line is the signal either way.
+    Intent writes are strict because no destructive action has started yet. Outcome
+    writes remain best-effort because raising after deletion would misreport what
+    already happened.
     """
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,8 +89,10 @@ def _append(path: Path, entry: dict) -> None:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
             handle.flush()
             os.fsync(handle.fileno())
-    except OSError:
+    except OSError as exc:
         log.exception("AUDIT WRITE FAILED — not recorded: %s", entry)
+        if strict:
+            raise AuditWriteError("audit intent could not be written; deletion aborted") from exc
 
 
 def record(path: Path, plan: DeletePlan, actor: str, confirmed: str) -> None:
@@ -112,22 +118,6 @@ def record(path: Path, plan: DeletePlan, actor: str, confirmed: str) -> None:
             {"kind": s.kind, "status": s.status, "detail": s.detail, "targets": s.targets}
             for s in plan.steps
         ],
-    }
-    _append(path, entry)
-
-
-def record_purge(
-    path: Path, names: list[str], outcome: dict[str, str], freed: int, actor: str
-) -> None:
-    """Append one entry for an slskd leftover purge. Same file, different shape."""
-    entry = {
-        "event": "outcome",
-        "ts": datetime.now(UTC).isoformat(),
-        "actor": actor,
-        "library": "slskd",
-        "names": names,
-        "outcome": outcome,
-        "freed_bytes": freed,
     }
     _append(path, entry)
 

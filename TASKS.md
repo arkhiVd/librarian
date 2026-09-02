@@ -14,8 +14,9 @@ Change class: Risky. The application authenticates users and deletes files. Work
 - [x] Add README, security policy, license, and contribution guidance.
 - [x] Add pinned GitHub Actions, CodeQL, container scanning, and Dependabot configuration.
 - [x] Run formatting, lint, Python tests, JavaScript checks, and Compose validation.
-- [ ] Build and scan the container locally. This requires separate approval to alter Docker state.
+- [x] Build and scan the container locally after receiving approval.
 - [x] Run Gitleaks against the complete public history.
 - [x] Re-read the full diff against `SPEC.md`.
-- [ ] Obtain an independent review in a fresh context.
-- [x] Present the release candidate for human approval before any GitHub action.
+- [x] Obtain an independent read-only review in a fresh Pi/Herdr context.
+- [x] Resolve all independent-review findings and rerun the validation gate.
+- [ ] Obtain explicit human approval before creating a GitHub repository or pushing.

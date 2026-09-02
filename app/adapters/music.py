@@ -197,7 +197,8 @@ class MusicAdapter:
                 f"{unreadable} directory/directories could not be read. The file count and "
                 "sizes below are an UNDERCOUNT of what will be deleted."
             )
-        digest = self._digest(pruned, files, steps)
+        digest_targets = [*files, *(self.root / rel for rel in pruned)]
+        digest = self._digest(pruned, digest_targets, steps)
         confirm = Path(pruned[0]).name if len(pruned) == 1 else f"DELETE {len(pruned)} items"
 
         return DeletePlan(
@@ -347,15 +348,13 @@ class MusicAdapter:
     def _prune_empty_dirs(self, rel_paths: list[str]) -> None:
         """Remove directories left empty, bottom-up, never passing the library root.
 
-        Lidarr's ``deleteEmptyFolders`` is false on this instance, so nothing else does
-        this. It stops at the first non-empty parent — in /music/Eng and /music/Echo that
-        is immediately, which is exactly right: those hold other artists' files.
+        It stops at the first non-empty parent, which preserves unrelated files in a
+        directory shared by several artists.
         """
         for rel in rel_paths:
             target = self.root / rel
-            # Descend first. An artist folder is not "empty" while it still holds empty
-            # album folders, and albums here nest further (Smoke + Mirrors has two
-            # "12 Vinyl 0N" subdirectories). Bottom-up, so children go before parents.
+            # Descend first. A parent is not empty while it still holds empty child
+            # directories, so children must be considered before parents.
             if target.is_dir():
                 for dirpath, _dirnames, _filenames in os.walk(target, topdown=False):
                     # Emptiness is checked live, not from os.walk's lists: bottom-up walk
@@ -412,23 +411,27 @@ class MusicAdapter:
         return warnings
 
     @staticmethod
-    def _digest(pruned: list[str], files: list[Path], steps: list[Step]) -> str:
-        """Hash of everything the user was shown, so execute can refuse a changed plan.
+    def _digest(pruned: list[str], filesystem_targets: list[Path], steps: list[Step]) -> str:
+        """Hash filesystem identity and every action the user approved.
 
-        **The steps are part of this, not just the files.** A filesystem-only digest was
-        the original bug: Lidarr adopting existing files changes no size and no mtime, so
-        a plan the user approved as "unlink 2 orphan files" could execute as an album
-        unmonitor, a bulk delete and a full artist retire under an identical digest. Any
-        change in Lidarr-derived intent must invalidate the plan.
+        Size and mtime alone do not identify a file because a replacement can restore
+        both. Device, inode, mode, link count, ctime, size, and mtime cover replacement
+        and hardlink changes. Steps remain part of the digest because manager adoption
+        can change destructive intent without touching the filesystem.
         """
         h = hashlib.sha256()
         for rel in pruned:
             h.update(rel.encode())
             h.update(b"\0")
-        for f in sorted(files):
-            st = f.lstat()
-            h.update(str(f).encode())
-            h.update(f"{st.st_size}:{st.st_mtime_ns}".encode())
+        for target in sorted(set(filesystem_targets), key=str):
+            st = target.lstat()
+            h.update(str(target).encode())
+            h.update(
+                (
+                    f"{st.st_dev}:{st.st_ino}:{st.st_mode}:{st.st_nlink}:"
+                    f"{st.st_size}:{st.st_mtime_ns}:{st.st_ctime_ns}"
+                ).encode()
+            )
             h.update(b"\0")
         h.update(b"steps\0")
         for step in steps:
@@ -442,9 +445,8 @@ class MusicAdapter:
     def shared_directories(self, index: LidarrIndex | None = None) -> dict[str, list[str]]:
         """Top-level directories holding more than one artist's files.
 
-        ``/music/Echo`` and ``/music/Eng`` are the known cases: 1.7 G belonging to a dozen
-        artists apiece. The UI flags these, because "delete this folder" is exactly the
-        wrong mental model there.
+        The UI flags these because a folder name does not describe all files it may
+        contain, and deleting the whole directory can remove several artists.
         """
         idx = index if index is not None else self.index()
         by_dir: dict[str, set[str]] = defaultdict(set)
